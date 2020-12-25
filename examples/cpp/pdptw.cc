@@ -222,8 +222,8 @@ bool LoadAndSolve(const std::string& pdp_file,
   }
   // Parse file header.
   std::vector<int64> parsed_int;
-  if (!SafeParseInt64Array(lines[0], &parsed_int) || parsed_int.size() != 3 ||
-      parsed_int[0] < 0 || parsed_int[1] < 0 || parsed_int[2] < 0) {
+  if (!SafeParseInt64Array(lines[0], &parsed_int) || parsed_int.size() != 4 ||
+      parsed_int[0] < 0 || parsed_int[1] < 0 || parsed_int[2] < 0 || parsed_int[3] < 0) {
     LOG(WARNING) << "Malformed header: " << lines[0];
     return false;
   }
@@ -232,6 +232,7 @@ bool LoadAndSolve(const std::string& pdp_file,
                                : parsed_int[0];
   const int64 capacity = parsed_int[1];
   // We do not care about the 'speed' field, in third position.
+  const int64 horizon = parsed_int[3];
 
   // Parse order data.
   std::vector<int> customer_ids;
@@ -242,7 +243,6 @@ bool LoadAndSolve(const std::string& pdp_file,
   std::vector<int64> service_times;
   std::vector<RoutingIndexManager::NodeIndex> pickups;
   std::vector<RoutingIndexManager::NodeIndex> deliveries;
-  int64 horizon = 0;
   RoutingIndexManager::NodeIndex depot(0);
   for (int line_index = 1; line_index < lines.size(); ++line_index) {
     if (!SafeParseInt64Array(lines[line_index], &parsed_int) ||
@@ -273,7 +273,6 @@ bool LoadAndSolve(const std::string& pdp_file,
     if (pickup == 0 && delivery == 0) {
       depot = RoutingIndexManager::NodeIndex(pickups.size() - 1);
     }
-    horizon = std::max(horizon, close_time);
   }
 
   // Build pickup and delivery model.
@@ -315,9 +314,9 @@ bool LoadAndSolve(const std::string& pdp_file,
       routing.AddPickupAndDelivery(index,
                                    manager.NodeToIndex(deliveries[node]));
     }
-    IntVar* const cumul = time_dimension.CumulVar(index);
-    cumul->SetMin(kScalingFactor * open_times[node]);
-    cumul->SetMax(kScalingFactor * close_times[node]);
+    //IntVar* const cumul = time_dimension.CumulVar(index);
+    //cumul->SetMin(kScalingFactor * open_times[node]);
+    //cumul->SetMax(kScalingFactor * close_times[node]);
   }
 
   if (search_parameters.local_search_metaheuristic() ==
@@ -352,7 +351,8 @@ bool LoadAndSolve(const std::string& pdp_file,
   for (RoutingIndexManager::NodeIndex order(1); order < routing.nodes();
        ++order) {
     std::vector<int64> orders(1, manager.NodeToIndex(order));
-    routing.AddDisjunction(orders, kPenalty);
+	LOG(INFO) << "node: " << order.value() << ", penalty: " << demands[order.value()];
+    routing.AddDisjunction(orders, kPenalty * demands[order.value()]);
   }
 
   // Solve pickup and delivery problem.
