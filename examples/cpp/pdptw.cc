@@ -351,7 +351,6 @@ bool LoadAndSolve(const std::string& pdp_file,
   for (RoutingIndexManager::NodeIndex order(1); order < routing.nodes();
        ++order) {
     std::vector<int64> orders(1, manager.NodeToIndex(order));
-	LOG(INFO) << "node: " << order.value() << ", penalty: " << demands[order.value()];
     routing.AddDisjunction(orders, kPenalty * demands[order.value()]);
   }
 
