@@ -238,6 +238,7 @@ bool LoadAndSolve(const std::string& pdp_file,
   std::vector<int> customer_ids;
   std::vector<std::pair<int, int> > coords;
   std::vector<int64> demands;
+  std::vector<int64> interests;
   std::vector<int64> open_times;
   std::vector<int64> close_times;
   std::vector<int64> service_times;
@@ -246,9 +247,9 @@ bool LoadAndSolve(const std::string& pdp_file,
   RoutingIndexManager::NodeIndex depot(0);
   for (int line_index = 1; line_index < lines.size(); ++line_index) {
     if (!SafeParseInt64Array(lines[line_index], &parsed_int) ||
-        parsed_int.size() != 9 || parsed_int[0] < 0 || parsed_int[4] < 0 ||
-        parsed_int[5] < 0 || parsed_int[6] < 0 || parsed_int[7] < 0 ||
-        parsed_int[8] < 0) {
+        parsed_int.size() != 10 || parsed_int[0] < 0 || parsed_int[4] < 0 ||
+		parsed_int[5] < 0 || parsed_int[6] < 0 || parsed_int[7] < 0 || 
+		parsed_int[8] < 0 || parsed_int[9] < 0) {
       LOG(WARNING) << "Malformed line #" << line_index << ": "
                    << lines[line_index];
       return false;
@@ -257,14 +258,16 @@ bool LoadAndSolve(const std::string& pdp_file,
     const int x = parsed_int[1];
     const int y = parsed_int[2];
     const int64 demand = parsed_int[3];
-    const int64 open_time = parsed_int[4];
-    const int64 close_time = parsed_int[5];
-    const int64 service_time = parsed_int[6];
-    const int pickup = parsed_int[7];
-    const int delivery = parsed_int[8];
+    const int64 interest = parsed_int[4];
+	const int64 open_time = parsed_int[5];
+    const int64 close_time = parsed_int[6];
+    const int64 service_time = parsed_int[7];
+    const int pickup = parsed_int[8];
+    const int delivery = parsed_int[9];
     customer_ids.push_back(customer_id);
     coords.push_back(std::make_pair(x, y));
     demands.push_back(demand);
+	interests.push_back(interest);
     open_times.push_back(open_time);
     close_times.push_back(close_time);
     service_times.push_back(service_time);
@@ -351,8 +354,7 @@ bool LoadAndSolve(const std::string& pdp_file,
   for (RoutingIndexManager::NodeIndex order(1); order < routing.nodes();
        ++order) {
     std::vector<int64> orders(1, manager.NodeToIndex(order));
-	LOG(INFO) << "node: " << order.value() << ", penalty: " << demands[order.value()];
-    routing.AddDisjunction(orders, kPenalty * demands[order.value()]);
+    routing.AddDisjunction(orders, kPenalty * abs(interests[order.value()]));
   }
 
   // Solve pickup and delivery problem.
@@ -370,7 +372,7 @@ bool LoadAndSolve(const std::string& pdp_file,
       if (!routing.IsEnd(node) && !routing.IsStart(node) &&
           assignment->Value(routing.NextVar(node)) == node) {
         skipped_nodes++;
-      }
+	  }
     }
     LOG(INFO) << "Number of skipped nodes: " << skipped_nodes;
     int num_used_vehicles = 0;
