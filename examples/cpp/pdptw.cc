@@ -38,6 +38,7 @@
 
 #include <utility>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_split.h"
@@ -147,26 +148,35 @@ namespace operations_research {
 	}
 
 	// Outputs a solution to the current model in a std::string.
-	std::string VerboseOutput(const RoutingModel& routing,
+	nlohmann::json VerboseOutput(const RoutingModel& routing,
 			const RoutingIndexManager& manager,
 			const Assignment& assignment,
 			const Coordinates& coords,
 			const std::vector<int64>& service_times,
 			const int64 speed) {
-		std::string output;
-		const RoutingDimension& time_dimension = routing.GetDimensionOrDie("time");
-		const RoutingDimension& load_dimension = routing.GetDimensionOrDie("demand");
+		
+		// prepare JSON output
+		nlohmann::json j;
+		j["routes"] = {};
+
+		//const RoutingDimension& time_dimension = routing.GetDimensionOrDie("time");
+		//const RoutingDimension& load_dimension = routing.GetDimensionOrDie("demand");
 		for (int i = 0; i < routing.vehicles(); ++i) {
-			absl::StrAppendFormat(&output, "Vehicle %d: ", i);
+			//absl::StrAppendFormat(&output, "Vehicle %d: ", i);
 			int64 index = routing.Start(i);
+			nlohmann::json path;
 			if (routing.IsEnd(assignment.Value(routing.NextVar(index)))) {
-				output.append("empty");
+				//output.append("empty");
 			} else {
 				while (!routing.IsEnd(index)) {
-					const int64 next_index = assignment.Value(routing.NextVar(index));
-					absl::StrAppendFormat(&output, "%d -> %d ",
-							manager.IndexToNode(index).value(),
-							manager.IndexToNode(next_index).value());
+					nlohmann:: json t;
+					t["app_id"] = 0;
+					std::pair<double, double> dst = coords[manager.IndexToNode(index).value()];
+					t["location"] = {{"latitude", dst.first}, {"longitude", dst.second}};
+					path.push_back(t);
+					//absl::StrAppendFormat(&output, "%d -> %d ",
+					//		manager.IndexToNode(index).value(),
+					//		manager.IndexToNode(next_index).value());
 					//const IntVar* vehicle = routing.VehicleVar(index);
 					//absl::StrAppendFormat(&output, "Vehicle(%d) ",
 					//		assignment.Value(vehicle));
@@ -180,21 +190,33 @@ namespace operations_research {
 					//		&output, "Transit(%d) ",
 					//		TravelPlusServiceTime(manager, &coords, &service_times, index,
 					//			next_index, speed));
-					index = next_index;
+					index = assignment.Value(routing.NextVar(index));
 				}
-				output.append("Route end ");
-				const IntVar* vehicle = routing.VehicleVar(index);
-				absl::StrAppendFormat(&output, "Vehicle(%d) ", assignment.Value(vehicle));
-				const IntVar* arrival = time_dimension.CumulVar(index);
-				absl::StrAppendFormat(&output, "Time(%d..%d) ", assignment.Min(arrival),
-						assignment.Max(arrival));
-				const IntVar* load = load_dimension.CumulVar(index);
-				absl::StrAppendFormat(&output, "Load(%d..%d) ", assignment.Min(load),
-						assignment.Max(load));
+				
+				// assemble JSON for vehicle
+				nlohmann::json v;
+				v["total_interest"] = 0;
+				v["total_time"] = 0;
+				v["vehicle_start"] = {path[0]["location"]};
+				v["vehicle_end"] = {path[path.size()-1]["location"]};
+				v["path"] = {};
+				for (int i = 1; i < path.size()-1; ++i) {
+					v["path"].push_back(path[i]);
+				}
+				j["routes"].push_back(v);
+
+				//const IntVar* vehicle = routing.VehicleVar(index);
+				//absl::StrAppendFormat(&output, "Vehicle(%d) ", assignment.Value(vehicle));
+				//const IntVar* arrival = time_dimension.CumulVar(index);
+				//absl::StrAppendFormat(&output, "Time(%d..%d) ", assignment.Min(arrival),
+				//		assignment.Max(arrival));
+				//const IntVar* load = load_dimension.CumulVar(index);
+				//absl::StrAppendFormat(&output, "Load(%d..%d) ", assignment.Min(load),
+				//		assignment.Max(load));
 			}
-			output.append("\n");
 		}
-		return output;
+		j["allocation"] = {{"1", 0}, {"2", 0}};
+		return j;
 	}
 
 	namespace {
@@ -398,31 +420,12 @@ namespace operations_research {
 		}
 
 		// Solve pickup and delivery problem.
-		SimpleCycleTimer timer;
-		timer.Start();
 		const Assignment* assignment = routing.SolveWithParameters(search_parameters);
-		timer.Stop();
-		LOG(INFO) << routing.solver()->LocalSearchProfile();
+		
 		if (nullptr != assignment) {
-			LOG(INFO) << VerboseOutput(routing, manager, *assignment, coords,
+			nlohmann::json x = VerboseOutput(routing, manager, *assignment, coords,
 					service_times, speed);
-			LOG(INFO) << "Cost: " << assignment->ObjectiveValue();
-			int skipped_nodes = 0;
-			for (int node = 0; node < routing.Size(); node++) {
-				if (!routing.IsEnd(node) && !routing.IsStart(node) &&
-						assignment->Value(routing.NextVar(node)) == node) {
-					skipped_nodes++;
-				}
-			}
-			LOG(INFO) << "Number of skipped nodes: " << skipped_nodes;
-			int num_used_vehicles = 0;
-			for (int v = 0; v < routing.vehicles(); v++) {
-				if (routing.IsVehicleUsed(*assignment, v)) {
-					num_used_vehicles++;
-				}
-			}
-			LOG(INFO) << "Number of used vehicles: " << num_used_vehicles;
-			LOG(INFO) << "Time: " << timer.Get();
+			std::cout << x.dump(4);
 			return true;
 		}
 		return false;
