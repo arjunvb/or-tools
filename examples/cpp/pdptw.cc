@@ -187,26 +187,9 @@ namespace operations_research {
 					if (deliveries[x].value() != 0 && pickups[x].value() == 0) {
 						total_interest += interests[x];
 						allocation[customer_ids[x]] += interests[x];
-						//std::cout << "delivery to node " << x << " (" << dst.first << "," << dst.second << ")" << std::endl;
 					} else if (customer_ids[x] != -1) {
 						allocation[customer_ids[x]] += 0;
 					}
-					//absl::StrAppendFormat(&output, "%d -> %d ",
-					//		manager.IndexToNode(index).value(),
-					//		manager.IndexToNode(next_index).value());
-					//const IntVar* vehicle = routing.VehicleVar(index);
-					//absl::StrAppendFormat(&output, "Vehicle(%d) ",
-					//		assignment.Value(vehicle));
-					//const IntVar* arrival = time_dimension.CumulVar(index);
-					//absl::StrAppendFormat(&output, "Time(%d..%d) ", assignment.Min(arrival),
-					//		assignment.Max(arrival));
-					//const IntVar* load = load_dimension.CumulVar(index);
-					//absl::StrAppendFormat(&output, "Load(%d..%d) ", assignment.Min(load),
-					//		assignment.Max(load));
-					//absl::StrAppendFormat(
-					//		&output, "Transit(%d) ",
-					//		TravelPlusServiceTime(manager, &coords, &service_times, index,
-					//			next_index, speed));
 					int64 next_index = assignment.Value(routing.NextVar(index));
 					total_time += TravelPlusServiceTime(
 							manager, &coords, &service_times, index, 
@@ -225,15 +208,6 @@ namespace operations_research {
 					v["path"].push_back(path[i]);
 				}
 				j["routes"].push_back(v);
-
-				//const IntVar* vehicle = routing.VehicleVar(index);
-				//absl::StrAppendFormat(&output, "Vehicle(%d) ", assignment.Value(vehicle));
-				//const IntVar* arrival = time_dimension.CumulVar(index);
-				//absl::StrAppendFormat(&output, "Time(%d..%d) ", assignment.Min(arrival),
-				//		assignment.Max(arrival));
-				//const IntVar* load = load_dimension.CumulVar(index);
-				//absl::StrAppendFormat(&output, "Load(%d..%d) ", assignment.Min(load),
-				//		assignment.Max(load));
 			}
 		}
 
