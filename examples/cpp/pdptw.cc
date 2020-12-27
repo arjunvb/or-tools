@@ -152,12 +152,16 @@ namespace operations_research {
 			const RoutingIndexManager& manager,
 			const Assignment& assignment,
 			const Coordinates& coords,
+			const std::vector<int>& customer_ids,
 			const std::vector<int64>& service_times,
 			const std::vector<double>& interests,
 			const std::vector<RoutingIndexManager::NodeIndex>& pickups,
 			const std::vector<RoutingIndexManager::NodeIndex>& deliveries,
 			const int64 speed) {
 		
+		// store allocation by customer
+		std::map<int, int> allocation;
+
 		// prepare JSON output
 		nlohmann::json j;
 		j["routes"] = {};
@@ -175,14 +179,17 @@ namespace operations_research {
 			} else {
 				while (!routing.IsEnd(index)) {
 					nlohmann:: json t;
-					t["app_id"] = 0;
 					int64 x = manager.IndexToNode(index).value();
 					std::pair<double, double> dst = coords[x];
 					t["location"] = {{"latitude", dst.first}, {"longitude", dst.second}};
+					t["app_id"] = customer_ids[x];
 					path.push_back(t);
 					if (deliveries[x].value() != 0 && pickups[x].value() == 0) {
 						total_interest += interests[x];
+						allocation[customer_ids[x]] += interests[x];
 						//std::cout << "delivery to node " << x << " (" << dst.first << "," << dst.second << ")" << std::endl;
+					} else if (customer_ids[x] != -1) {
+						allocation[customer_ids[x]] += 0;
 					}
 					//absl::StrAppendFormat(&output, "%d -> %d ",
 					//		manager.IndexToNode(index).value(),
@@ -229,7 +236,13 @@ namespace operations_research {
 				//		assignment.Max(load));
 			}
 		}
-		j["allocation"] = {{"1", 0}, {"2", 0}};
+
+		// save allocation
+		j["allocation"] = {};
+		for (const auto &x : allocation) {
+			std::string key = std::to_string(x.first);
+			j["allocation"][key] = x.second;
+		}
 		return j;
 	}
 
@@ -286,6 +299,7 @@ namespace operations_research {
 
 		// Parse order data.
 		std::vector<int> task_ids;
+		std::vector<int> customer_ids;
 		std::vector<std::pair<double, double> > coords;
 		std::vector<int64> demands;
 		std::vector<double> interests;
@@ -299,24 +313,26 @@ namespace operations_research {
 	
 		for (int line_index = 1; line_index < lines.size(); ++line_index) {
 			if (!SafeParseDoubleArray(lines[line_index], &parsed_dbl) ||
-					parsed_dbl.size() != 10 || parsed_dbl[0] < 0 || parsed_dbl[4] < 0 ||
-					parsed_dbl[5] < 0 || parsed_dbl[6] < 0 || parsed_dbl[7] < 0 || 
-					parsed_dbl[8] < 0 || parsed_dbl[9] < 0) {
+					parsed_dbl.size() != 11 || parsed_dbl[0] < 0 || parsed_dbl[5] < 0 ||
+					parsed_dbl[6] < 0 || parsed_dbl[7] < 0 || parsed_dbl[7] < 0 || 
+					parsed_dbl[9] < 0 || parsed_dbl[10] < 0) {
 				LOG(WARNING) << "Malformed line #" << line_index << ": "
 					<< lines[line_index];
 				return false;
 			}
 			const int task_id = parsed_dbl[0];
-			const double x = parsed_dbl[1];
-			const double y = parsed_dbl[2];
-			const int64 demand = parsed_dbl[3];
-			const double interest = parsed_dbl[4];
-			const int64 open_time = parsed_dbl[5];
-			const int64 close_time = parsed_dbl[6];
-			const int64 service_time = parsed_dbl[7];
-			const int pickup = parsed_dbl[8];
-			const int delivery = parsed_dbl[9];
+			const int customer_id = parsed_dbl[1];
+			const double x = parsed_dbl[2];
+			const double y = parsed_dbl[3];
+			const int64 demand = parsed_dbl[4];
+			const double interest = parsed_dbl[5];
+			const int64 open_time = parsed_dbl[6];
+			const int64 close_time = parsed_dbl[7];
+			const int64 service_time = parsed_dbl[8];
+			const int pickup = parsed_dbl[9];
+			const int delivery = parsed_dbl[10];
 			task_ids.push_back(task_id);
+			customer_ids.push_back(customer_id);
 			coords.push_back(std::make_pair(x, y));
 			demands.push_back(demand);
 			interests.push_back(interest);
@@ -333,6 +349,7 @@ namespace operations_research {
 		// Add dummy node.
 		const int task_id = task_ids.size();
 		task_ids.push_back(task_id);
+		customer_ids.push_back(-1);
 		coords.push_back(std::make_pair(-1, -1));
 		demands.push_back(0);
 		interests.push_back(0);
@@ -438,7 +455,7 @@ namespace operations_research {
 		
 		if (nullptr != assignment) {
 			nlohmann::json x = VerboseOutput(routing, manager, *assignment, coords,
-					service_times, interests, pickups, deliveries, speed);
+					customer_ids, service_times, interests, pickups, deliveries, speed);
 			std::cout << x.dump(2);
 			return true;
 		}
