@@ -40,13 +40,7 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 
-#include "absl/strings/str_format.h"
-#include "absl/strings/str_split.h"
-#include "google/protobuf/text_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/file.h"
 #include "ortools/base/mathutil.h"
-#include "ortools/base/timer.h"
 #include "ortools/constraint_solver/routing.h"
 #include "ortools/constraint_solver/routing_enums.pb.h"
 #include "ortools/constraint_solver/routing_index_manager.h"
@@ -54,18 +48,6 @@
 #include "ortools/constraint_solver/routing_parameters.pb.h"
 
 #define EARTH_RADIUS (6.3781 * 1e6)
-
-ABSL_FLAG(std::string, pdp_file, "",
-		"File containing the Pickup and Delivery Problem to solve.");
-ABSL_FLAG(int, pdp_force_vehicles, 0,
-		"Force the number of vehicles used (maximum number of routes.");
-ABSL_FLAG(bool, reduce_vehicle_cost_model, true,
-		"Overrides the homonymous field of "
-		"DefaultRoutingModelParameters().");
-ABSL_FLAG(std::string, routing_search_parameters,
-		"first_solution_strategy:ALL_UNPERFORMED",
-		"Text proto RoutingSearchParameters (possibly partial) that will "
-		"override the DefaultRoutingSearchParameters()");
 
 namespace operations_research {
 
@@ -169,7 +151,6 @@ namespace operations_research {
 		//const RoutingDimension& time_dimension = routing.GetDimensionOrDie("time");
 		//const RoutingDimension& load_dimension = routing.GetDimensionOrDie("demand");
 		for (int i = 0; i < routing.vehicles(); ++i) {
-			//absl::StrAppendFormat(&output, "Vehicle %d: ", i);
 			int64 index = routing.Start(i);
 			nlohmann::json path;
 			double total_interest = 0;
@@ -236,25 +217,18 @@ namespace operations_research {
 
 	// Builds and solves a model from a file in the format defined by Li & Lim
 	// (https://www.sintef.no/projectweb/top/pdptw/li-lim-benchmark/documentation/).
-	bool LoadAndSolve(const std::string& pdp_file,
-			const RoutingModelParameters& model_parameters,
+	bool LoadAndSolve(const RoutingModelParameters& model_parameters,
 			const RoutingSearchParameters& search_parameters) {
 		// Load all the lines of the file in RAM (it shouldn't be too large anyway).
 		std::vector<std::string> lines;
-		{
-			std::string contents;
-			CHECK_OK(file::GetContents(pdp_file, &contents, file::Defaults()));
-			const int64 kMaxInputFileSize = 1 << 30;  // 1GB
-			if (contents.size() >= kMaxInputFileSize) {
-				LOG(WARNING) << "Input file '" << pdp_file << "' is too large (>"
-					<< kMaxInputFileSize << " bytes).";
-				return false;
-			}
-			lines = absl::StrSplit(contents, '\n', absl::SkipEmpty());
+		std::string line;
+		while (std::getline(std::cin, line)) {
+			lines.push_back(line);
 		}
+		
 		// Reading header.
 		if (lines.empty()) {
-			LOG(WARNING) << "Empty file: " << pdp_file;
+			LOG(WARNING) << "Empty file (stdin)";
 			return false;
 		}
 		// Parse file header.
@@ -264,9 +238,7 @@ namespace operations_research {
 			LOG(WARNING) << "Malformed header: " << lines[0];
 			return false;
 		}
-		const int num_vehicles = absl::GetFlag(FLAGS_pdp_force_vehicles) > 0
-			? absl::GetFlag(FLAGS_pdp_force_vehicles)
-			: parsed_dbl[0];
+		const int num_vehicles = parsed_dbl[0];
 		const int64 capacity = parsed_dbl[1];
 		const int64 speed = parsed_dbl[2];
 		const int64 horizon = parsed_dbl[3];
@@ -430,7 +402,7 @@ namespace operations_research {
 		if (nullptr != assignment) {
 			nlohmann::json x = VerboseOutput(routing, manager, *assignment, coords,
 					customer_ids, service_times, interests, pickups, deliveries, speed);
-			std::cout << x.dump(2);
+			std::cout << x;
 			return true;
 		}
 		return false;
@@ -439,19 +411,13 @@ namespace operations_research {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-	absl::SetFlag(&FLAGS_logtostderr, true);
-	absl::ParseCommandLine(argc, argv);
 	operations_research::RoutingModelParameters model_parameters =
 		operations_research::DefaultRoutingModelParameters();
-	model_parameters.set_reduce_vehicle_cost_model(
-			absl::GetFlag(FLAGS_reduce_vehicle_cost_model));
+	model_parameters.set_reduce_vehicle_cost_model(true);
 	operations_research::RoutingSearchParameters search_parameters =
 		operations_research::DefaultRoutingSearchParameters();
-	CHECK(google::protobuf::TextFormat::MergeFromString(
-				absl::GetFlag(FLAGS_routing_search_parameters), &search_parameters));
-	if (!operations_research::LoadAndSolve(absl::GetFlag(FLAGS_pdp_file),
-				model_parameters, search_parameters)) {
-		LOG(INFO) << "Error solving " << absl::GetFlag(FLAGS_pdp_file);
+	if (!operations_research::LoadAndSolve(model_parameters, search_parameters)) {
+		LOG(INFO) << "Error solving model.";
 	}
 	return EXIT_SUCCESS;
 }
