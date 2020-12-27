@@ -153,6 +153,9 @@ namespace operations_research {
 			const Assignment& assignment,
 			const Coordinates& coords,
 			const std::vector<int64>& service_times,
+			const std::vector<double>& interests,
+			const std::vector<RoutingIndexManager::NodeIndex>& pickups,
+			const std::vector<RoutingIndexManager::NodeIndex>& deliveries,
 			const int64 speed) {
 		
 		// prepare JSON output
@@ -165,15 +168,22 @@ namespace operations_research {
 			//absl::StrAppendFormat(&output, "Vehicle %d: ", i);
 			int64 index = routing.Start(i);
 			nlohmann::json path;
+			double total_interest = 0;
+			double total_time = 0;
 			if (routing.IsEnd(assignment.Value(routing.NextVar(index)))) {
 				//output.append("empty");
 			} else {
 				while (!routing.IsEnd(index)) {
 					nlohmann:: json t;
 					t["app_id"] = 0;
-					std::pair<double, double> dst = coords[manager.IndexToNode(index).value()];
+					int64 x = manager.IndexToNode(index).value();
+					std::pair<double, double> dst = coords[x];
 					t["location"] = {{"latitude", dst.first}, {"longitude", dst.second}};
 					path.push_back(t);
+					if (deliveries[x].value() != 0 && pickups[x].value() == 0) {
+						total_interest += interests[x];
+						//std::cout << "delivery to node " << x << " (" << dst.first << "," << dst.second << ")" << std::endl;
+					}
 					//absl::StrAppendFormat(&output, "%d -> %d ",
 					//		manager.IndexToNode(index).value(),
 					//		manager.IndexToNode(next_index).value());
@@ -190,13 +200,17 @@ namespace operations_research {
 					//		&output, "Transit(%d) ",
 					//		TravelPlusServiceTime(manager, &coords, &service_times, index,
 					//			next_index, speed));
-					index = assignment.Value(routing.NextVar(index));
+					int64 next_index = assignment.Value(routing.NextVar(index));
+					total_time += TravelPlusServiceTime(
+							manager, &coords, &service_times, index, 
+							next_index, speed);
+					index = next_index;
 				}
 				
 				// assemble JSON for vehicle
 				nlohmann::json v;
-				v["total_interest"] = 0;
-				v["total_time"] = 0;
+				v["total_interest"] = total_interest;
+				v["total_time"] = total_time/operations_research::kScalingFactor;
 				v["vehicle_start"] = {path[0]["location"]};
 				v["vehicle_end"] = {path[path.size()-1]["location"]};
 				v["path"] = {};
@@ -424,8 +438,8 @@ namespace operations_research {
 		
 		if (nullptr != assignment) {
 			nlohmann::json x = VerboseOutput(routing, manager, *assignment, coords,
-					service_times, speed);
-			std::cout << x.dump(4);
+					service_times, interests, pickups, deliveries, speed);
+			std::cout << x.dump(2);
 			return true;
 		}
 		return false;
