@@ -38,6 +38,7 @@
 
 #include <utility>
 #include <vector>
+#include <unordered_set>
 #include <nlohmann/json.hpp>
 
 #include "ortools/base/mathutil.h"
@@ -135,6 +136,7 @@ namespace operations_research {
 			const Assignment& assignment,
 			const Coordinates& coords,
 			const std::vector<int>& customer_ids,
+			const std::unordered_set<int> &unique_customers,
 			const std::vector<int64>& service_times,
 			const std::vector<double>& interests,
 			const std::vector<RoutingIndexManager::NodeIndex>& pickups,
@@ -154,7 +156,7 @@ namespace operations_research {
 			int64 index = routing.Start(i);
 			nlohmann::json path;
 			double total_interest = 0;
-			double total_time = 0;
+			int total_time = 0;
 			if (routing.IsEnd(assignment.Value(routing.NextVar(index)))) {
 				//output.append("empty");
 			} else {
@@ -194,9 +196,10 @@ namespace operations_research {
 
 		// save allocation
 		j["allocation"] = {};
-		for (const auto &x : allocation) {
-			std::string key = std::to_string(x.first);
-			j["allocation"][key] = x.second;
+		for (const auto& x : unique_customers) {
+			if (x == -1) continue;
+			std::string key = std::to_string(x);
+			j["allocation"][key] = allocation[x];
 		}
 		return j;
 	}
@@ -308,6 +311,9 @@ namespace operations_research {
 			ends.push_back(RoutingIndexManager::NodeIndex(task_id));
 		}
 
+		// Store unique customer IDs
+		std::unordered_set<int> unique_customers(customer_ids.begin(), customer_ids.end());
+
 		// Build pickup and delivery model.
 		const int num_nodes = task_ids.size();
 		RoutingIndexManager manager(
@@ -401,7 +407,8 @@ namespace operations_research {
 		
 		if (nullptr != assignment) {
 			nlohmann::json x = VerboseOutput(routing, manager, *assignment, coords,
-					customer_ids, service_times, interests, pickups, deliveries, speed);
+					customer_ids, unique_customers, service_times, interests, 
+					pickups, deliveries, speed);
 			std::cout << x;
 			return true;
 		}
