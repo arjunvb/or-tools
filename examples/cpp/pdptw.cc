@@ -135,10 +135,11 @@ namespace operations_research {
 			const RoutingIndexManager& manager,
 			const Assignment& assignment,
 			const Coordinates& coords,
+			const std::vector<int>& request_times,
 			const std::vector<int>& customer_ids,
 			const std::unordered_set<int> &unique_customers,
 			const std::vector<int64>& service_times,
-			const std::vector<double>& interests,
+			const std::vector<double>& uw_interests,
 			const std::vector<RoutingIndexManager::NodeIndex>& pickups,
 			const std::vector<RoutingIndexManager::NodeIndex>& deliveries,
 			const int64 speed) {
@@ -166,10 +167,19 @@ namespace operations_research {
 					std::pair<double, double> dst = coords[x];
 					t["location"] = {{"latitude", dst.first}, {"longitude", dst.second}};
 					t["app_id"] = customer_ids[x];
-					path.push_back(t);
+					t["destination"] = {{"latitude", -1}, {"longitude", -1}};
+					
+					// credit during pickup
 					if (deliveries[x].value() != 0 && pickups[x].value() == 0) {
-						total_interest += interests[x];
-						allocation[customer_ids[x]] += interests[x];
+						t["request_time"] = request_times[x];
+						// add destination
+						int64 y = deliveries[x].value();
+						t["destination"] = {
+							{"latitude", coords[y].first},
+							{"longitude", coords[y].second}};
+						t["interest"] = uw_interests[x];
+						total_interest += uw_interests[x];
+						allocation[customer_ids[x]] += uw_interests[x];
 					} else if (customer_ids[x] != -1) {
 						allocation[customer_ids[x]] += 0;
 					}
@@ -177,15 +187,23 @@ namespace operations_research {
 					total_time += TravelPlusServiceTime(
 							manager, &coords, &service_times, index, 
 							next_index, speed);
+					t["fulfill_time"] = total_time/operations_research::kScalingFactor;
 					index = next_index;
+					
+					// append to path
+					path.push_back(t);
 				}
 				
 				// assemble JSON for vehicle
 				nlohmann::json v;
 				v["total_interest"] = total_interest;
 				v["total_time"] = total_time/operations_research::kScalingFactor;
-				v["vehicle_start"] = {path[0]["location"]};
-				v["vehicle_end"] = {path[path.size()-1]["location"]};
+				v["vehicle_start"] = {
+					{"latitude", path[0]["location"]["latitude"]},
+					{"longitude", path[0]["location"]["longitude"]}};
+				v["vehicle_end"] = {
+					{"latitude", path[path.size()-1]["location"]["latitude"]},
+					{"longitude", path[path.size()-1]["location"]["longitude"]}};
 				v["path"] = {};
 				for (int i = 1; i < path.size()-1; ++i) {
 					v["path"].push_back(path[i]);
@@ -196,10 +214,12 @@ namespace operations_research {
 
 		// save allocation
 		j["allocation"] = {};
+		int total;
 		for (const auto& x : unique_customers) {
 			if (x == -1) continue;
 			std::string key = std::to_string(x);
 			j["allocation"][key] = allocation[x];
+			total += allocation[x];
 		}
 		return j;
 	}
@@ -249,11 +269,11 @@ namespace operations_research {
 		// Parse order data.
 		std::vector<int> task_ids;
 		std::vector<int> customer_ids;
+		std::vector<int> request_times;
 		std::vector<std::pair<double, double> > coords;
 		std::vector<int64> demands;
 		std::vector<double> interests;
-		std::vector<int64> open_times;
-		std::vector<int64> close_times;
+		std::vector<double> uw_interests;
 		std::vector<int64> service_times;
 		std::vector<RoutingIndexManager::NodeIndex> pickups;
 		std::vector<RoutingIndexManager::NodeIndex> deliveries;
@@ -262,31 +282,31 @@ namespace operations_research {
 	
 		for (int line_index = 1; line_index < lines.size(); ++line_index) {
 			if (!SafeParseDoubleArray(lines[line_index], &parsed_dbl) ||
-					parsed_dbl.size() != 11 || parsed_dbl[0] < 0 || parsed_dbl[5] < 0 ||
-					parsed_dbl[6] < 0 || parsed_dbl[7] < 0 || parsed_dbl[7] < 0 || 
-					parsed_dbl[9] < 0 || parsed_dbl[10] < 0) {
+					parsed_dbl.size() != 11 || parsed_dbl[0] < 0 || parsed_dbl[6] < 0 ||
+					parsed_dbl[7] < 0 || parsed_dbl[8] < 0 || parsed_dbl[9] < 0 || 
+					parsed_dbl[10] < 0) {
 				LOG(WARNING) << "Malformed line #" << line_index << ": "
 					<< lines[line_index];
 				return false;
 			}
 			const int task_id = parsed_dbl[0];
 			const int customer_id = parsed_dbl[1];
-			const double x = parsed_dbl[2];
-			const double y = parsed_dbl[3];
-			const int64 demand = parsed_dbl[4];
-			const double interest = parsed_dbl[5];
-			const int64 open_time = parsed_dbl[6];
-			const int64 close_time = parsed_dbl[7];
+			const int request_time = parsed_dbl[2];
+			const double x = parsed_dbl[3];
+			const double y = parsed_dbl[4];
+			const int64 demand = parsed_dbl[5];
+			const double interest = parsed_dbl[6];
+			const double uw_interest = parsed_dbl[7];
 			const int64 service_time = parsed_dbl[8];
 			const int pickup = parsed_dbl[9];
 			const int delivery = parsed_dbl[10];
 			task_ids.push_back(task_id);
 			customer_ids.push_back(customer_id);
+			request_times.push_back(request_time);
 			coords.push_back(std::make_pair(x, y));
 			demands.push_back(demand);
 			interests.push_back(interest);
-			open_times.push_back(open_time);
-			close_times.push_back(close_time);
+			uw_interests.push_back(uw_interest);
 			service_times.push_back(service_time);
 			pickups.push_back(RoutingIndexManager::NodeIndex(pickup));
 			deliveries.push_back(RoutingIndexManager::NodeIndex(delivery));
@@ -300,10 +320,10 @@ namespace operations_research {
 		task_ids.push_back(task_id);
 		customer_ids.push_back(-1);
 		coords.push_back(std::make_pair(-1, -1));
+		request_times.push_back(0);
 		demands.push_back(0);
 		interests.push_back(0);
-		open_times.push_back(0);
-		close_times.push_back(0);
+		uw_interests.push_back(0);
 		service_times.push_back(0);
 		pickups.push_back(RoutingIndexManager::NodeIndex(0));
 		deliveries.push_back(RoutingIndexManager::NodeIndex(0));
@@ -407,8 +427,8 @@ namespace operations_research {
 		
 		if (nullptr != assignment) {
 			nlohmann::json x = VerboseOutput(routing, manager, *assignment, coords,
-					customer_ids, unique_customers, service_times, interests, 
-					pickups, deliveries, speed);
+					request_times, customer_ids, unique_customers, 
+					service_times, uw_interests, pickups, deliveries, speed);
 			std::cout << x;
 			return true;
 		}
@@ -423,6 +443,7 @@ int main(int argc, char** argv) {
 	model_parameters.set_reduce_vehicle_cost_model(true);
 	operations_research::RoutingSearchParameters search_parameters =
 		operations_research::DefaultRoutingSearchParameters();
+	search_parameters.mutable_time_limit()->set_seconds(180);
 	if (!operations_research::LoadAndSolve(model_parameters, search_parameters)) {
 		LOG(INFO) << "Error solving model.";
 	}
