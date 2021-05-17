@@ -476,7 +476,7 @@ int main(int argc, char** argv) {
 	model_parameters.set_reduce_vehicle_cost_model(true);
 	operations_research::RoutingSearchParameters search_parameters =
 		operations_research::DefaultRoutingSearchParameters();
-	search_parameters.mutable_time_limit()->set_seconds(300);
+	search_parameters.mutable_time_limit()->set_seconds(180);
 	if (!operations_research::LoadAndSolve(model_parameters, search_parameters)) {
 		LOG(INFO) << "Error solving model.";
 	}
