@@ -40,6 +40,8 @@
 #include <vector>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
+#include <fstream>
+#include <math.h>
 
 #include "ortools/base/mathutil.h"
 #include "ortools/constraint_solver/routing.h"
@@ -60,28 +62,25 @@ namespace operations_research {
 	// metric grid.
 	typedef std::vector<std::pair<double, double> > Coordinates;
 
+	// Travel time matrix
+	typedef std::map<std::pair<std::pair<double, double>, std::pair<double, double>>, double> TravelTime;
+
 	const std::pair<double, double> dummy = std::pair<double, double>(-1, -1);
 
-	// Returns the scaled Euclidean distance between two nodes, coords holding the
-	// coordinates of the nodes.
 	int64 Travel(const Coordinates* const coords,
 			RoutingIndexManager::NodeIndex from,
 			RoutingIndexManager::NodeIndex to,
-			const int64 speed) {
+			TravelTime* tt) {
 		DCHECK(coords != nullptr);
 		const std::pair<double, double> src = coords->at(from.value());
 		const std::pair<double, double> dst = coords->at(to.value());
 		if (src == dummy || dst == dummy) {
 			return 0;
 		} else {
-			const double xd = (dst.second - src.second) * 
-				cos(0.5 * (src.first + dst.first) * M_PI/180) * 
-				M_PI/180 * EARTH_RADIUS;
-			const double yd = (dst.first - src.first) * M_PI/180 * EARTH_RADIUS;
-			return static_cast<int64>(kScalingFactor *
-					std::sqrt(1.0L * xd * xd + yd * yd)/speed);
+			return static_cast<int64>(kScalingFactor * tt->at(std::make_pair(src, dst)));
 		}
 	}
+
 
 	// Returns the scaled service time at a given node, service_times holding the
 	// service times.
@@ -97,10 +96,10 @@ namespace operations_research {
 	int64 TravelPlusServiceTime(const RoutingIndexManager& manager,
 			const Coordinates* const coords,
 			const std::vector<int64>* const service_times,
-			int64 from_index, int64 to_index, int64 speed) {
+			int64 from_index, int64 to_index, TravelTime* tt) {
 		const RoutingIndexManager::NodeIndex from = manager.IndexToNode(from_index);
 		const RoutingIndexManager::NodeIndex to = manager.IndexToNode(to_index);
-		return ServiceTime(service_times, from) + Travel(coords, from, to, speed);
+		return ServiceTime(service_times, from) + Travel(coords, from, to, tt);
 	}
 
 	// Returns the list of variables to use for the Tabu metaheuristic.
@@ -142,7 +141,7 @@ namespace operations_research {
 			const std::vector<double>& uw_interests,
 			const std::vector<RoutingIndexManager::NodeIndex>& pickups,
 			const std::vector<RoutingIndexManager::NodeIndex>& deliveries,
-			const int64 speed) {
+			TravelTime& tt) {
 		
 		// store allocation by customer
 		std::map<int, int> allocation;
@@ -168,10 +167,10 @@ namespace operations_research {
 					t["location"] = {{"latitude", dst.first}, {"longitude", dst.second}};
 					t["app_id"] = customer_ids[x];
 					t["destination"] = {{"latitude", -1}, {"longitude", -1}};
+					t["request_time"] = request_times[x];
 					
 					// credit during pickup
 					if (deliveries[x].value() != 0 && pickups[x].value() == 0) {
-						t["request_time"] = request_times[x];
 						// add destination
 						int64 y = deliveries[x].value();
 						t["destination"] = {
@@ -186,7 +185,7 @@ namespace operations_research {
 					int64 next_index = assignment.Value(routing.NextVar(index));
 					total_time += TravelPlusServiceTime(
 							manager, &coords, &service_times, index, 
-							next_index, speed);
+							next_index, &tt);
 					t["fulfill_time"] = total_time/operations_research::kScalingFactor;
 					index = next_index;
 					
@@ -254,9 +253,12 @@ namespace operations_research {
 			LOG(WARNING) << "Empty file (stdin)";
 			return false;
 		}
+		// Parse path to travel time
+		const std::string tt_path = lines[0];
+
 		// Parse file header.
 		std::vector<double> parsed_dbl;
-		if (!SafeParseDoubleArray(lines[0], &parsed_dbl) || parsed_dbl.size() != 4 ||
+		if (!SafeParseDoubleArray(lines[1], &parsed_dbl) || parsed_dbl.size() != 4 ||
 				parsed_dbl[0] < 0 || parsed_dbl[1] < 0 || parsed_dbl[2] < 0 || parsed_dbl[3] < 0) {
 			LOG(WARNING) << "Malformed header: " << lines[0];
 			return false;
@@ -279,39 +281,47 @@ namespace operations_research {
 		std::vector<RoutingIndexManager::NodeIndex> deliveries;
 		std::vector<RoutingIndexManager::NodeIndex> starts;
 		std::vector<RoutingIndexManager::NodeIndex> ends;
+		std::vector<std::vector<int64>> initial_schedule;
 	
-		for (int line_index = 1; line_index < lines.size(); ++line_index) {
-			if (!SafeParseDoubleArray(lines[line_index], &parsed_dbl) ||
-					parsed_dbl.size() != 11 || parsed_dbl[0] < 0 || parsed_dbl[6] < 0 ||
-					parsed_dbl[7] < 0 || parsed_dbl[8] < 0 || parsed_dbl[9] < 0 || 
-					parsed_dbl[10] < 0) {
+		for (int line_index = 2; line_index < lines.size(); ++line_index) {
+			bool success = SafeParseDoubleArray(lines[line_index], &parsed_dbl);
+			if (success && parsed_dbl.size() == 11 && parsed_dbl[0] >= 0 && 
+					parsed_dbl[6] >= 0 && parsed_dbl[7] >= 0 && parsed_dbl[8] >= 0 
+					&& parsed_dbl[9] >= 0 && parsed_dbl[10] >= 0) {
+				const int task_id = parsed_dbl[0];
+				const int customer_id = parsed_dbl[1];
+				const int request_time = parsed_dbl[2];
+				const double x = parsed_dbl[3];
+				const double y = parsed_dbl[4];
+				const int64 demand = parsed_dbl[5];
+				const double interest = parsed_dbl[6];
+				const double uw_interest = parsed_dbl[7];
+				const int64 service_time = parsed_dbl[8];
+				const int pickup = parsed_dbl[9];
+				const int delivery = parsed_dbl[10];
+				task_ids.push_back(task_id);
+				customer_ids.push_back(customer_id);
+				request_times.push_back(request_time);
+				coords.push_back(std::make_pair(x, y));
+				demands.push_back(demand);
+				interests.push_back(interest);
+				uw_interests.push_back(uw_interest);
+				service_times.push_back(service_time);
+				pickups.push_back(RoutingIndexManager::NodeIndex(pickup));
+				deliveries.push_back(RoutingIndexManager::NodeIndex(delivery));
+				if (pickup == 0 && delivery == 0) {
+					starts.push_back(RoutingIndexManager::NodeIndex(task_id));
+				}
+			} else if (success && parsed_dbl[0] < 0) {
+				std::vector<int64> path;
+				for (int i = 1; i < parsed_dbl.size(); ++i) {
+					path.push_back(parsed_dbl[i]);
+				}
+				initial_schedule.push_back(path);
+			} else {
 				LOG(WARNING) << "Malformed line #" << line_index << ": "
 					<< lines[line_index];
 				return false;
-			}
-			const int task_id = parsed_dbl[0];
-			const int customer_id = parsed_dbl[1];
-			const int request_time = parsed_dbl[2];
-			const double x = parsed_dbl[3];
-			const double y = parsed_dbl[4];
-			const int64 demand = parsed_dbl[5];
-			const double interest = parsed_dbl[6];
-			const double uw_interest = parsed_dbl[7];
-			const int64 service_time = parsed_dbl[8];
-			const int pickup = parsed_dbl[9];
-			const int delivery = parsed_dbl[10];
-			task_ids.push_back(task_id);
-			customer_ids.push_back(customer_id);
-			request_times.push_back(request_time);
-			coords.push_back(std::make_pair(x, y));
-			demands.push_back(demand);
-			interests.push_back(interest);
-			uw_interests.push_back(uw_interest);
-			service_times.push_back(service_time);
-			pickups.push_back(RoutingIndexManager::NodeIndex(pickup));
-			deliveries.push_back(RoutingIndexManager::NodeIndex(delivery));
-			if (pickup == 0 && delivery == 0) {
-				starts.push_back(RoutingIndexManager::NodeIndex(task_id));
 			}
 		}
 
@@ -334,6 +344,25 @@ namespace operations_research {
 		// Store unique customer IDs
 		std::unordered_set<int> unique_customers(customer_ids.begin(), customer_ids.end());
 
+		// load travel time file
+		std::ifstream ifs(tt_path);
+		nlohmann::json tt_file = nlohmann::json::parse(ifs);
+		std::map<std::pair<std::pair<double, double>, std::pair<double, double>>, double> tt;
+		for (auto& el : tt_file.items()) {
+			double plat = el.value()["Pickup"]["latitude"];
+			plat = round(plat * 1e6)/1e6;
+			double plon = el.value()["Pickup"]["longitude"];
+			plon = round(plon * 1e6)/1e6;
+			double dlat = el.value()["Dropoff"]["latitude"];
+			dlat = round(dlat * 1e6)/1e6;
+			double dlon = el.value()["Dropoff"]["longitude"];
+			dlon = round(dlon * 1e6)/1e6;
+			std::pair src = std::make_pair(plat, plon);
+			std::pair dst = std::make_pair(dlat, dlon);
+			tt[std::make_pair(src, dst)] = el.value()["TravelTime"];
+		}
+		LOG(WARNING) << "Done loading travel time matrix.";
+
 		// Build pickup and delivery model.
 		const int num_nodes = task_ids.size();
 		RoutingIndexManager manager(
@@ -343,10 +372,10 @@ namespace operations_research {
 				const_cast<const std::vector<RoutingIndexManager::NodeIndex>&>(ends));
 		RoutingModel routing(manager, model_parameters);
 		const int vehicle_cost =
-			routing.RegisterTransitCallback([&coords, &manager, &speed](int64 i, int64 j) {
+			routing.RegisterTransitCallback([&coords, &manager, &tt](int64 i, int64 j) {
 					return Travel(const_cast<const Coordinates*>(&coords),
 							manager.IndexToNode(i), manager.IndexToNode(j),
-							speed);
+							const_cast<TravelTime*>(&tt));
 					});
 		routing.SetArcCostEvaluatorOfAllVehicles(vehicle_cost);
 		RoutingTransitCallback2 demand_evaluator = [&](int64 from_index,
@@ -358,7 +387,7 @@ namespace operations_research {
 		RoutingTransitCallback2 time_evaluator = [&](int64 from_index,
 				int64 to_index) {
 			return TravelPlusServiceTime(manager, &coords, &service_times, from_index,
-					to_index, speed);
+					to_index, &tt);
 		};
 		routing.AddDimension(routing.RegisterTransitCallback(time_evaluator),
 				kScalingFactor * horizon, kScalingFactor * horizon,
@@ -422,13 +451,17 @@ namespace operations_research {
 			routing.AddDisjunction(orders, kPenalty * abs(interests[order.value()]));
 		}
 
+		// create initial assignment
+		const Assignment* initial_solution =
+			      routing.ReadAssignmentFromRoutes(initial_schedule, true);
+
 		// Solve pickup and delivery problem.
-		const Assignment* assignment = routing.SolveWithParameters(search_parameters);
+		const Assignment* assignment = routing.SolveFromAssignmentWithParameters(initial_solution, search_parameters);
 		
 		if (nullptr != assignment) {
 			nlohmann::json x = VerboseOutput(routing, manager, *assignment, coords,
 					request_times, customer_ids, unique_customers, 
-					service_times, uw_interests, pickups, deliveries, speed);
+					service_times, uw_interests, pickups, deliveries, tt);
 			std::cout << x;
 			return true;
 		}
@@ -443,7 +476,7 @@ int main(int argc, char** argv) {
 	model_parameters.set_reduce_vehicle_cost_model(true);
 	operations_research::RoutingSearchParameters search_parameters =
 		operations_research::DefaultRoutingSearchParameters();
-	search_parameters.mutable_time_limit()->set_seconds(180);
+	search_parameters.mutable_time_limit()->set_seconds(300);
 	if (!operations_research::LoadAndSolve(model_parameters, search_parameters)) {
 		LOG(INFO) << "Error solving model.";
 	}
